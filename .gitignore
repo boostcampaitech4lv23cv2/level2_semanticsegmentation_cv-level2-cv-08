@@ -1,0 +1,8 @@
+# data
+input/data
+
+# save pth
+input/code/saved
+
+# .file
+.*
