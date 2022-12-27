@@ -2,17 +2,16 @@ import wandb
 
 # yapf:disable
 log_config = dict(
-    interval=150,
+    interval=99,
     hooks=[
-        dict(type="TextLoggerHook", by_epoch=True),
+        dict(type="TextLoggerHook", by_epoch=False),
         dict(
             type="MMSegWandbHook",
             init_kwargs=dict(
                 entity="8bit_seg", project="model-test", name="beit"
             ),
-            interval=652,
-            log_checkpoint=True,
-            log_checkpoint_metadata=True,
+            # log_checkpoint=True,
+            # log_checkpoint_metadata=True,
             num_eval_images=100,
         )
     ],

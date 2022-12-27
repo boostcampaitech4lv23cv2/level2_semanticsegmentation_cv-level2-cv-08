@@ -6,8 +6,8 @@ _base_ = [
 ]
 
 model = dict(
-    # pretrained='pretrain/beit_large_patch16_224_pt22k_ft22k.pth',
-    pretrained="https://conversationhub.blob.core.windows.net/beit-share-public/beit/beit_large_patch16_224_pt22k_ft22k.pth",
+    pretrained='pretrain/beit_large_patch16_224_pt22k_ft22k.pth',
+    # pretrained="https://conversationhub.blob.core.windows.net/beit-share-public/beit/beit_large_patch16_224_pt22k_ft22k.pth",
     backbone=dict(
         type="BEiT",
         embed_dims=1024,
@@ -30,25 +30,24 @@ model = dict(
 optimizer = dict(
     _delete_=True,
     type="AdamW",
-    lr=2e-5,
+    lr=5e-5,
     betas=(0.9, 0.999),
     weight_decay=0.05,
-    constructor="LayerDecayOptimizerConstructor",
     paramwise_cfg=dict(num_layers=24, layer_decay_rate=0.95),
 )
 
 lr_config = dict(
     _delete_=True,
-    policy="poly",
-    warmup="linear",
-    warmup_iters=3000,
-    warmup_ratio=1e-4,
-    power=1.0,
-    min_lr=0.0,
-    by_epoch=False,
-)
+    policy='CosineRestart',
+    warmup='linear',
+    warmup_iters=1000,
+    warmup_ratio=1e-6,
+    min_lr_ratio=1e-6,
+    periods=[4000, 6000, 10000],
+    restart_weights=[1.0, 0.5, 0.3],
+    by_epoch=False)
 
-data = dict(samples_per_gpu=4)
+data = dict(samples_per_gpu=3)
 optimizer_config = dict(type="GradientCumulativeFp16OptimizerHook", cumulative_iters=2)
 
 fp16 = dict()
