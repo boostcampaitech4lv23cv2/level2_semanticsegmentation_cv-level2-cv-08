@@ -10,7 +10,7 @@ from tqdm import tqdm
 import cv2
 import albumentations as A
 
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from pycocotools.coco import COCO
 
 min_keypoints_per_image = 10
@@ -69,6 +69,12 @@ class CocoDataset(Dataset):
                     categories[ann['category_id']].append(ann['id'])
         self.ids = ids
         self.categories = categories
+        self.transform = A.Compose([
+                    A.RandomScale(scale_limit=0.3, p=1.0),
+                    A.RandomRotate90(0.5),
+                    A.PadIfNeeded(512, 512, border_mode=0),
+                    A.Resize(512, 512),
+                ], bbox_params=A.BboxParams(format="coco", min_visibility=0.05))
 
     def __len__(self):
         return len(self.ids)
@@ -109,66 +115,80 @@ class CocoDataset(Dataset):
         return image
     
     def get_random_obj(self, ori):
+        masks = []
+        bboxes = []
+        
         # 위치 제한 객체 없을 시
         if self.cp_loc: 
             if [1 for bbox in ori['bboxes'] if bbox[4] in self.cp_loc] == []:
                 return ori
         
+        # TODO: p 통해서 확률 조정
         random_class = np.random.choice(self.cp_obj)
         random_id = np.random.choice(self.categories[random_class])
         random_ann = self.coco.loadAnns(int(random_id))[0]
-        transform = A.Compose([
-                    A.RandomScale(scale_limit=0.3, p=1.0),
-                    A.RandomRotate90(0.5),
-                    A.PadIfNeeded(512, 512, border_mode=0),
-                    A.Resize(512, 512),
-                ], bbox_params=A.BboxParams(format="coco", min_visibility=0.05))
+        img_id = random_ann['image_id']
 
-        image = self.get_image(random_ann['image_id'])
-        masks = [self.coco.annToMask(random_ann)]
-        bboxes = [random_ann['bbox'] + [random_ann['category_id']]]
+        image = self.get_image(img_id)
+        select_mask = self.coco.annToMask(random_ann)
+        
+        for ann in self.coco.getAnnIds(img_id):
+            load_ann = self.coco.loadAnns(ann)[0]
+            mask = self.coco.annToMask(load_ann)
+            for i,j in zip([1,1,-1,-1],[1,0,1,0]):
+                temp = mask + np.roll(select_mask, shift=i, axis=j)
+                if any(map(any, temp > 1)):
+                    masks.append(mask)
+                    bboxes.append(load_ann['bbox']+[load_ann['category_id']])
+                    select_mask = temp > 0
+                    break
+        
         item = {
             'image': image,
             'masks': masks,
             'bboxes': bboxes
         }
-        output = transform(**item)
-        o_x, o_y, o_w, o_h = map(int,output['bboxes'][0][:4])
+        output = self.transform(**item)
+        temp = []
+        for bboxes in output['bboxes']:
+            temp.append([bboxes[0],bboxes[1],bboxes[0]+bboxes[2],bboxes[1]+bboxes[3],bboxes[4]])
+        o_x, o_y,*_ = map(int,np.min(temp, axis=0))
+        _,_,o_w, o_h,*_ = map(int,np.max(temp, axis=0))
+        o_w, o_h = o_w-o_x, o_h-o_y
+        
+        new_mask = np.zeros((512,512)).astype(np.uint8)
+        for i, m in enumerate(output['masks']):
+            new_mask[m > 0] = output['bboxes'][i][-1]
         
         # 위치 선정
         if self.cp_loc: # 특정 객체 위에만 paste
             loc_bboxes = [bbox for bbox in ori['bboxes'] if bbox[4] in self.cp_loc]
             r_x, r_y, *_ = loc_bboxes[np.random.choice(len(loc_bboxes))]
-            r_x = np.random.randint(min(511-o_w, r_x), 512-o_w)
-            r_y = np.random.randint(min(511-o_h, r_y), 512-o_h)
+            r_x = np.random.randint(min(512-o_w, r_x), 513-o_w)
+            r_y = np.random.randint(min(512-o_h, r_y), 513-o_h)
         elif len(self.cp_loc) == 0: # 랜덤 위치
-            r_x = np.random.randint(0,512-o_w)
-            r_y = np.random.randint(0,512-o_h)
+            r_x = np.random.randint(0,513-o_w)
+            r_y = np.random.randint(0,513-o_h)
         else:
             raise Exception("잘못된 위치 입력")
         
         # 이미지 붙여넣기
         ori_img = ori['image']
         cut_img = output['image'][o_y:o_y+o_h, o_x:o_x+o_w]
-        cut_mask = output['masks'][0][o_y:o_y+o_h, o_x:o_x+o_w]
-        mask_range = cut_mask == 1
-        new_mask = np.zeros((512,512)).astype(np.uint8)
-        new_mask[r_y:r_y+o_h, r_x:r_x+o_w][mask_range] = 1
+        cut_mask = new_mask[o_y:o_y+o_h, o_x:o_x+o_w]
+        mask_range = cut_mask > 0
+
         ori_img[r_y:r_y+o_h, r_x:r_x+o_w][mask_range] = cut_img[mask_range]
         
-        # for i in range(len(ori['masks'])):
-        #     ori['masks'][i][new_mask == 1] = 0
-        
-        ori['new_masks'][new_mask == 1] = random_class
-        ori['masks'].append(new_mask)
+        ori['new_masks'][r_y:r_y+o_h, r_x:r_x+o_w][mask_range] = cut_mask[mask_range]
+        ori['masks'].extend(output['masks'])
         ori['image'] = ori_img
-        ori['bboxes'].append([r_x,r_y,o_w,o_h,random_class, ori['bboxes'][-1][-1]+1])
-        
+        ori['bboxes'].extend(output['bboxes'])
+                
         return ori
     
 if __name__ == "__main__":
-    dataset = CocoDataset('../data', 'train.json', [2,3,4,5,6,7,8,9,10],[8])
-
+    dataset = CocoDataset('../data', 'train.json')
     if not os.path.exists('cp_data/img'):
         os.makedirs('cp_data/img')
     if not os.path.exists('cp_data/ann'):
@@ -176,7 +196,7 @@ if __name__ == "__main__":
         
     for i in tqdm(range(len(dataset))):
         data = dataset[i].copy()
-        for cnt in range(2):
+        for cnt in range(1):
             data = dataset.get_random_obj(data)
         cv2.imwrite(f'cp_data/img/{str(i).zfill(4)}.jpg', cv2.cvtColor(data['image'], cv2.COLOR_RGB2BGR))
         cv2.imwrite(f'cp_data/ann/{str(i).zfill(4)}.png', data['new_masks'].astype(np.uint8))
