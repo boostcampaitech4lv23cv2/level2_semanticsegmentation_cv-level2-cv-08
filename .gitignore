@@ -1,8 +1,16 @@
 # data
-input/data
+data
 
 # save pth
-input/code/saved
+code/saved
 
 # .file
 .*
+
+# mmseg
+input/mmsegmentation/
+
+# _pycache_
+__pycache__
+
+
