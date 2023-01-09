@@ -8,7 +8,6 @@ code/saved
 .*
 
 # mmseg
-input/mmsegmentation/
 
 # _pycache_
 __pycache__
